@@ -1,354 +1,393 @@
-(() => {
-  'use strict';
+import * as store from './store.js';
+import { parseMoney, formatMoney, formatDate, todayInZone, monthRange, buildReport } from './domain.js';
+import { renderAuth, renderPage, renderForm } from './views.js';
+import { escape, icon } from './ui.js';
 
-  document.documentElement.classList.add('js');
-  // Два кадра: стили первого состояния применены, теперь можно анимировать.
-  requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.add('animated')));
-  const cafes = window.DAILY_CUP;
-  const labels = { taste: 'Вкус', barista: 'Бариста', atmosphere: 'Атмосфера', value: 'Цена' };
-  const keys = { review: 'daily-cup.reviews.v1', suggest: 'daily-cup.suggestions.v1' };
-  const photoAlts = [
-    'Интерьер современной кофейни со столами и стульями',
-    'Интерьер кофейни с тёплым освещением',
-    'Солнечный свет в интерьере современной кофейни',
-    'Интерьер кофейни с кирпичной стеной',
-    'Уютная кофейня с меню над стойкой',
-    'Уютный стильный интерьер кафе'
+const app = document.getElementById('app');
+const recordDialog = document.getElementById('record-dialog');
+const confirmDialog = document.getElementById('confirm-dialog');
+const pages = {
+  overview: ['Обзор', 'Финансовая картина без лишнего шума', 'overview'],
+  revenue: ['Продажи', 'Каждый день вашей кофейни в цифрах', 'revenue'],
+  expenses: ['Расходы', 'Знайте, на что работает ваша выручка', 'expense'],
+  money: ['Движение денег', 'Фактические поступления и выплаты', 'wallet'],
+  costs: ['Себестоимость', 'Использованное сырьё, а не закупки', 'cost'],
+  history: ['История операций', 'Все записи в одном месте', 'history'],
+  compare: ['Сравнение точек', 'Один период. Единые правила. Ясная картина.', 'compare'],
+  settings: ['Настройки', 'Ваше пространство, кофейни и категории', 'settings']
+};
+const collections = { cafe: 'cafes', category: 'categories', revenue: 'revenues', expense: 'expenses', movement: 'movements', cost: 'costs' };
+const today = todayInZone();
+const initialRange = monthRange(today.slice(0, 7));
+const filters = { ...initialRange, cafeIds: [], search: '', type: 'all', categoryId: '' };
+let data = null;
+let report = null;
+let route = 'overview';
+let authMode = 'login';
+let revision = 0;
+let returnFocus = null;
+let confirmAction = null;
+let toastTimer;
+
+function toast(message, error = false) {
+  const region = document.getElementById('toast-region');
+  clearTimeout(toastTimer);
+  region.innerHTML = `<div class="toast${error ? ' toast--error' : ''}" role="${error ? 'alert' : 'status'}">${icon(error ? 'warning' : 'check')}<span>${escape(message)}</span><button class="icon-button" type="button" data-action="dismiss-toast" aria-label="Закрыть уведомление">${icon('close', 16)}</button></div>`;
+  toastTimer = setTimeout(() => { region.replaceChildren(); }, error ? 10000 : 5000);
+}
+
+function readLocation() {
+  const [path, query = ''] = location.hash.replace(/^#\/?/, '').split('?');
+  route = Object.hasOwn(pages, path) ? path : 'overview';
+  const params = new URLSearchParams(query);
+  const from = params.get('from');
+  const to = params.get('to');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(from || '') && /^\d{4}-\d{2}-\d{2}$/.test(to || '') && from <= to) {
+    filters.from = from;
+    filters.to = to;
+  }
+  if (params.has('cafe')) filters.cafeIds = params.getAll('cafe');
+}
+
+function filterMarkup() {
+  const selected = data.cafes.filter(cafe => filters.cafeIds.includes(cafe.id));
+  const label = selected.length ? selected.length === 1 ? selected[0].name : `Точек выбрано: ${selected.length}` : 'Все кофейни';
+  return `<form id="report-filters" class="filter-form" aria-label="Период и кофейни">
+    <div class="date-range">${icon('calendar', 17)}<label class="sr-only" for="period-from">Начало периода</label><input id="period-from" name="from" type="date" required value="${escape(filters.from)}"><span aria-hidden="true">–</span><label class="sr-only" for="period-to">Конец периода</label><input id="period-to" name="to" type="date" required value="${escape(filters.to)}"></div>
+    <details class="cafe-picker"><summary>${icon('store', 17)}<span>${escape(label)}</span>${icon('chevron', 16)}</summary><div class="cafe-picker__options"><p class="field__hint">Нет отметок – все кофейни</p>${data.cafes.length ? data.cafes.map(cafe => `<label class="check-field"><input type="checkbox" name="cafeIds" value="${escape(cafe.id)}"${filters.cafeIds.includes(cafe.id) ? ' checked' : ''}><span>${escape(cafe.name)}${cafe.archived ? ' · архив' : ''}</span></label>`).join('') : '<p class="text-muted">Сначала добавьте кофейню</p>'}</div></details>
+    <button class="button button--secondary button--small" type="submit">Показать</button>
+    <select name="preset" aria-label="Быстрый выбор периода"><option value="">Выбрать период</option><option value="current">Этот месяц</option><option value="previous">Прошлый месяц</option><option value="week">Последние 7 дней</option><option value="today">Сегодня</option></select>
+  </form>`;
+}
+
+function shell() {
+  const session = store.getSession();
+  const [title, subtitle] = pages[route];
+  const primaryKind = { revenue: 'revenue', expenses: 'expense', money: 'movement', costs: 'cost', settings: 'cafe' }[route] || 'revenue';
+  const primaryLabel = { revenue: 'Добавить продажи', expense: 'Добавить расход', movement: 'Добавить движение', cost: 'Внести себестоимость', cafe: 'Добавить кофейню' }[primaryKind];
+  const navigation = Object.entries(pages).map(([key, [label, , symbol]]) => `<a class="nav-link${route === key ? ' is-active' : ''}" href="#/${key}"${route === key ? ' aria-current="page"' : ''}>${icon(symbol)}<span>${label}</span>${route === key ? '<span class="nav-link__active-dot"></span>' : ''}</a>`).join('');
+  app.innerHTML = `<div class="app-shell"><button class="sidebar-backdrop" type="button" data-action="close-menu" aria-label="Закрыть навигацию" tabindex="-1"></button>
+    <aside class="sidebar" aria-label="Рабочее пространство"><button class="icon-button sidebar__close" type="button" data-action="close-menu" aria-label="Закрыть навигацию">${icon('close')}</button><a class="brand" href="#/overview" aria-label="Bloom, обзор">${icon('bloom', 35)}<span>Bloom<span class="brand__caption">COFFEE & CLARITY</span></span></a>
+      <div class="workspace-badge">${icon('building', 18)}<span>${escape(data.organization.name)}<small>${session.demo ? 'Пространство с примерами' : 'Личное пространство'}</small></span></div>
+      <p class="sidebar__label">УПРАВЛЕНИЕ</p><nav id="main-navigation" class="sidebar__nav" aria-label="Основная навигация">${navigation}</nav>
+      <div class="sidebar__bottom"><div class="sidebar-note">${icon('lock', 17)}<p>Ваши цифры.<br><span>На вашем устройстве.</span></p></div><div class="profile"><span class="profile__avatar">${escape((session.name || 'B').slice(0, 1).toUpperCase())}</span><span class="profile__name">${escape(session.name)}<small>${session.demo ? 'Знакомство с Bloom' : 'Владелец'}</small></span><button type="button" class="icon-button" data-action="logout" aria-label="Выйти">${icon('logout', 18)}</button></div></div>
+    </aside>
+    <div class="workspace"><header class="topbar"><div class="topbar__title"><button type="button" class="icon-button mobile-menu" data-action="menu" aria-expanded="false" aria-controls="main-navigation" aria-label="Открыть навигацию">${icon('menu')}</button><span class="topbar__breadcrumb">Рабочее пространство <span>/</span> <strong>${escape(title)}</strong></span></div><div class="topbar__actions"><span class="local-status"><i></i> Сохранение на устройстве</span><a class="icon-button" href="#/settings" aria-label="Настройки аккаунта">${icon('user', 18)}</a></div></header>
+      ${session.demo ? `<div class="demo-banner">${icon('info', 17)}<span><strong>Пространство с примерами.</strong> Все цифры иллюстративные. Изменения сохраняются отдельно от ваших данных.</span><button type="button" data-action="leave-demo">Создать своё ${icon('arrow-right', 16)}</button></div>` : ''}
+      <main id="main" class="main-content" tabindex="-1"><div class="page-heading"><div class="page-heading__copy"><p class="eyebrow">${route === 'overview' ? 'ВСЁ ПОД КОНТРОЛЕМ' : 'BLOOM / ' + escape(title).toLocaleUpperCase('ru')}</p><h1>${escape(title === 'Обзор' ? 'Большая картина. Ясные цифры.' : title)}</h1><p>${escape(subtitle)}</p></div><div class="page-heading__actions"><button class="button button--primary" type="button" data-action="create" data-kind="${primaryKind}">${icon('plus', 18)}${primaryLabel}</button></div></div>
+      ${route !== 'settings' ? `<div class="report-toolbar">${filterMarkup()}<button class="button button--ghost button--small" data-action="export" data-export="${route === 'compare' ? 'comparison' : route === 'overview' ? 'summary' : 'operations'}" type="button">${icon('download', 17)}<span>Экспорт CSV</span></button></div>` : ''}
+      <div id="page-content">${renderPage(route, { data, filters, report, session })}</div><footer class="app-footer"><span>© ${new Date().getFullYear()} Bloom. Все права защищены.</span><button type="button" data-action="privacy">О хранении данных ${icon('arrow-right', 13)}</button></footer></main>
+    </div></div>`;
+  const navigationParams = new URLSearchParams({ from: filters.from, to: filters.to });
+  filters.cafeIds.forEach(id => navigationParams.append('cafe', id));
+  app.querySelectorAll('a[href^="#/"]').forEach(link => {
+    if (!link.getAttribute('href').includes('?')) link.setAttribute('href', `${link.getAttribute('href')}?${navigationParams}`);
+  });
+  document.title = `${title} · Bloom`;
+}
+
+async function render({ focus = false } = {}) {
+  const token = ++revision;
+  if (!store.getSession()) {
+    app.innerHTML = renderAuth(authMode);
+    document.title = `${authMode === 'register' ? 'Создать пространство' : 'Добро пожаловать'} · Bloom`;
+    return;
+  }
+  readLocation();
+  app.setAttribute('aria-busy', 'true');
+  try {
+    const nextData = await store.snapshot();
+    if (token !== revision) return;
+    data = nextData;
+    filters.cafeIds = filters.cafeIds.filter(id => data.cafes.some(cafe => cafe.id === id));
+    report = buildReport(data, filters);
+    shell();
+    if (focus) document.getElementById('main').focus({ preventScroll: true });
+  } catch (error) {
+    if (token !== revision) return;
+    app.innerHTML = `<main id="main" class="status-view error-state">${icon('warning', 38)}<h1>Не удалось открыть данные</h1><p>${escape(error.message)}</p><button type="button" class="button button--primary" data-action="retry">${icon('refresh', 18)}Попробовать снова</button><button type="button" class="button button--ghost" data-action="logout">Вернуться ко входу</button></main>`;
+  } finally {
+    if (token === revision) app.removeAttribute('aria-busy');
+  }
+}
+
+function closeMenu() {
+  app.querySelector('.app-shell')?.classList.remove('is-menu-open');
+  app.querySelector('[data-action="menu"]')?.setAttribute('aria-expanded', 'false');
+  app.querySelector('.workspace')?.removeAttribute('inert');
+}
+
+function dialogClose(dialog) {
+  dialog.close();
+  if (returnFocus?.isConnected) returnFocus.focus();
+  else document.querySelector('.page-heading h1')?.focus();
+}
+
+function openRecord(kind, id = null) {
+  if (!data) return;
+  if (['revenue', 'expense', 'movement', 'cost'].includes(kind) && !data.cafes.some(cafe => !cafe.archived)) {
+    toast('Добавьте активную кофейню, чтобы начать учёт.');
+    kind = 'cafe';
+    id = null;
+  }
+  const record = kind === 'organization' ? data.organization : id ? data[collections[kind]]?.find(row => row.id === id) : null;
+  if (id && !record) throw new Error('Запись не найдена. Обновите страницу.');
+  const spec = renderForm(kind, record, { data, filters, report, session: store.getSession() });
+  returnFocus = document.activeElement;
+  recordDialog.innerHTML = `<form id="record-form" data-kind="${escape(kind)}" data-id="${escape(record?.id || '')}" data-version="${escape(record?.version ?? '')}" novalidate><div class="modal__header"><div><p class="eyebrow">ВАШ УЧЁТ</p><h2 id="dialog-title">${escape(spec.title)}</h2></div><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">${icon('close')}</button></div><div class="modal__body">${spec.body}<p id="form-error" class="form-error" role="alert" hidden></p></div><div class="modal__footer"><span class="field__hint">${icon('lock', 14)} Сохранится на этом устройстве</span><div class="form-actions"><button class="button button--secondary" type="button" data-action="close-dialog">Отмена</button><button class="button button--primary" type="submit">${icon('check', 17)}${escape(spec.submitLabel)}</button></div></div></form>`;
+  recordDialog.showModal();
+}
+
+function confirm(title, text, action, { dangerous = true, label = 'Удалить запись' } = {}) {
+  returnFocus = document.activeElement;
+  confirmAction = action;
+  confirmDialog.innerHTML = `<div class="modal__header"><h2 id="confirm-title">${escape(title)}</h2><button type="button" class="icon-button" data-action="close-confirm" aria-label="Закрыть">${icon('close')}</button></div><div class="modal__body"><div class="confirm-icon">${icon(dangerous ? 'trash' : 'info', 28)}</div><p>${escape(text)}</p><p id="confirm-error" class="form-error" role="alert" hidden></p></div><div class="modal__footer"><button class="button button--secondary" type="button" data-action="close-confirm">Отмена</button><button class="button ${dangerous ? 'button--danger' : 'button--primary'}" type="button" data-action="confirm">${escape(label)}</button></div>`;
+  confirmDialog.showModal();
+  confirmDialog.querySelector('[data-action="close-confirm"]').focus();
+}
+
+function formError(form, error) {
+  const alert = form.querySelector('#form-error, .auth-error');
+  if (alert) { alert.textContent = error.message || 'Не удалось сохранить данные. Попробуйте снова.'; alert.hidden = false; }
+  for (const [name, message] of Object.entries(error.fields || {})) {
+    const input = form.querySelector(`[name="${CSS.escape(name)}"]`);
+    if (!input) continue;
+    input.setAttribute('aria-invalid', 'true');
+    let note = input.closest('.field')?.querySelector('.field__error');
+    if (!note) { note = document.createElement('span'); note.className = 'field__error'; input.after(note); }
+    note.id = `${input.id || name}-error`;
+    input.setAttribute('aria-describedby', [...new Set([...(input.getAttribute('aria-describedby') || '').split(' ').filter(Boolean), note.id])].join(' '));
+    note.textContent = message;
+  }
+  form.querySelector('[aria-invalid="true"]')?.focus();
+}
+
+function humanMinor(value) {
+  if (value == null) return '';
+  const amount = BigInt(value);
+  const absolute = amount < 0n ? -amount : amount;
+  return `${amount < 0n ? '-' : ''}${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`;
+}
+
+function csvCell(value) {
+  let text = String(value ?? '');
+  if (/^[=+@\t\r]/.test(text) || /^-(?!\d+(?:[.,]\d+)?$)/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function operations() {
+  const selected = row => row.date >= filters.from && row.date <= filters.to && (!filters.cafeIds.length || filters.cafeIds.includes(row.cafeId));
+  const cafeName = id => data.cafes.find(cafe => cafe.id === id)?.name || '';
+  const category = id => data.categories.find(item => item.id === id)?.name || '';
+  const rows = [
+    ...data.revenues.map(row => ({ ...row, type: 'revenue', typeLabel: 'Выручка', total: (BigInt(row.cash) + BigInt(row.card) + BigInt(row.delivery)).toString(), category: '' })),
+    ...data.expenses.map(row => ({ ...row, type: 'expense', typeLabel: 'Расход', total: row.amount, category: category(row.categoryId) })),
+    ...data.movements.map(row => ({ ...row, type: 'movement', typeLabel: row.direction === 'in' ? 'Поступление' : 'Выплата', total: row.amount, category: '' }))
   ];
-  const average = scores => (Object.values(scores).reduce((sum, score) => sum + score, 0) / 4)
-    .toFixed(2).replace('.', ',');
+  return rows.filter(selected).filter(row => route !== 'history' || filters.type === 'all' || row.type === filters.type)
+    .filter(row => route !== 'history' || !filters.categoryId || row.categoryId === filters.categoryId)
+    .filter(row => route !== 'history' || !filters.search || `${row.date} ${row.comment || ''} ${row.category} ${cafeName(row.cafeId)} ${row.typeLabel}`.toLocaleLowerCase('ru').includes(filters.search.toLocaleLowerCase('ru')))
+    .sort((a, b) => b.date.localeCompare(a.date)).map(row => ({ ...row, cafeName: cafeName(row.cafeId) }));
+}
 
-  const menuButton = document.querySelector('.menu-toggle');
-  const menu = document.getElementById('site-nav');
-  const setMenu = open => {
-    menuButton.setAttribute('aria-expanded', String(open));
-    menu.classList.toggle('is-open', open);
-  };
-  menuButton.addEventListener('click', () => setMenu(menuButton.getAttribute('aria-expanded') !== 'true'));
-  menu.addEventListener('click', event => {
-    if (event.target.closest('a')) setMenu(false);
-  });
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && menuButton.getAttribute('aria-expanded') === 'true') {
-      setMenu(false);
-      menuButton.focus();
-    }
-  });
-
-  const filterForm = document.getElementById('filter-form');
-  if (filterForm) {
-    const filters = ['district', 'price', 'method'];
-    const params = new URLSearchParams(location.search);
-    filters.forEach(name => {
-      const control = filterForm.elements[name];
-      const value = params.get(name);
-      if (Array.from(control.options).some(option => option.value === value)) control.value = value;
-    });
-    const applyFilters = () => {
-      let count = 0;
-      const district = filterForm.elements.district.value;
-      const price = Number(filterForm.elements.price.value) || Infinity;
-      const method = filterForm.elements.method.value;
-      document.querySelectorAll('#catalog-grid .cafe-card').forEach(card => {
-        const visible = (!district || card.dataset.district === district)
-          && Number(card.dataset.price) <= price
-          && (!method || card.dataset.methods.split(',').includes(method));
-        card.hidden = !visible;
-        if (visible) count += 1;
-      });
-      document.getElementById('result-count').textContent = `Найдено: ${count}`;
-      document.getElementById('empty-state').hidden = count !== 0;
-      const url = new URL(location.href);
-      filters.forEach(name => {
-        const value = filterForm.elements[name].value;
-        if (value) url.searchParams.set(name, value);
-        else url.searchParams.delete(name);
-      });
-      history.replaceState(null, '', url);
-    };
-    filterForm.addEventListener('change', applyFilters);
-    filterForm.addEventListener('submit', event => event.preventDefault());
-    filterForm.addEventListener('reset', () => queueMicrotask(applyFilters));
-    document.getElementById('clear-filters').addEventListener('click', () => {
-      filterForm.reset();
-      document.getElementById('results-title').setAttribute('tabindex', '-1');
-      document.getElementById('results-title').focus();
-    });
-    applyFilters();
-
-    const toggle = document.querySelector('.filter-toggle');
-    const body = document.getElementById('filter-body');
-    const desktop = matchMedia('(min-width: 64rem)');
-    const setFiltersOpen = open => {
-      body.classList.toggle('is-collapsed', !open);
-      toggle.setAttribute('aria-expanded', String(open));
-    };
-    setFiltersOpen(desktop.matches);
-    desktop.addEventListener('change', () => setFiltersOpen(desktop.matches));
-    toggle.addEventListener('click', () => setFiltersOpen(toggle.getAttribute('aria-expanded') !== 'true'));
-  }
-
-  // Не вставляем пользовательские строки через innerHTML.
-  const element = (tag, className, text) => {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
-    return node;
-  };
-  const readRecords = kind => {
-    const records = JSON.parse(localStorage.getItem(keys[kind]) || '[]');
-    if (!Array.isArray(records)) throw new Error('Invalid local records');
-    return records;
-  };
-  const writeRecords = (kind, records) => localStorage.setItem(keys[kind], JSON.stringify(records));
-  const validRecord = record => record && typeof record.id === 'string'
-    && typeof record.name === 'string' && typeof record.text === 'string';
-  const validReview = record => validRecord(record) && cafes.some(cafe => cafe.id === record.cafe)
-    && record.scores && Object.keys(labels).every(key => Number.isInteger(record.scores[key])
-      && record.scores[key] >= 1 && record.scores[key] <= 5);
-
-  const reviewNode = (record, club = false) => {
-    const article = element('article', 'review');
-    const meta = element('div', 'review__meta');
-    meta.append(element('h3', '', record.name), element('span', 'rating', `★ ${average(record.scores)} / 5`));
-    article.append(meta);
-    const scores = element('p', 'review__scores');
-    Object.entries(labels).forEach(([key, label]) => scores.append(element('span', '', `${label}: ${record.scores[key]}/5`)));
-    article.append(scores, element('p', 'review__text', record.text));
-    if (!club) article.append(element('p', 'field__hint', 'Ваш отзыв · сохранён только в этом браузере'));
-    return article;
-  };
-
-  const cafeContent = document.getElementById('cafe-content');
-  if (cafeContent) {
-    const id = new URLSearchParams(location.search).get('id') || cafes[0].id;
-    const cafe = cafes.find(item => item.id === id);
-    if (!cafe) {
-      cafeContent.remove();
-      const notFound = document.getElementById('cafe-not-found');
-      notFound.hidden = false;
-      const heading = element('h1', '', 'Не нашли эту кофейню');
-      notFound.querySelector('h1, h2').replaceWith(heading);
-      document.title = 'Кофейня не найдена · Daily Cup';
+function exportCSV(kind) {
+  let rows;
+  if (kind === 'comparison') {
+    rows = [['Кофейня', 'Выручка, RUB', 'Операционные расходы, RUB', 'Себестоимость, RUB', 'Операционный результат, RUB', 'Денежный поток, RUB', 'Средний чек, RUB', 'Расчёт полный']];
+    report.byCafe.forEach(row => rows.push([row.name, humanMinor(row.revenue), humanMinor(row.operatingExpenses), humanMinor(row.costOfGoods), humanMinor(row.operatingResult), humanMinor(row.cashFlow), humanMinor(row.averageCheck), row.complete ? 'Да' : 'Нет']));
+  } else if (kind === 'summary') {
+    rows = [['Показатель', 'Сумма, RUB'], ['Начало периода', filters.from], ['Конец периода', filters.to], ['Выручка', humanMinor(report.revenue)], ['Операционные расходы', humanMinor(report.operatingExpenses)], ['Себестоимость', humanMinor(report.costOfGoods)], ['Валовой результат', humanMinor(report.grossResult)], ['Операционный результат', humanMinor(report.operatingResult)], ['Поступления', humanMinor(report.cashIn)], ['Выплаты', humanMinor(report.cashOut)], ['Денежный поток', humanMinor(report.cashFlow)], ['Средний чек', humanMinor(report.averageCheck)], ['Расчёт полный', report.complete ? 'Да' : 'Нет']];
+  } else {
+    let entries = operations();
+    if (route === 'revenue') entries = entries.filter(row => row.type === 'revenue');
+    if (route === 'expenses') entries = entries.filter(row => row.type === 'expense');
+    if (route === 'money') entries = entries.filter(row => row.type === 'movement');
+    if (route === 'costs') {
+      rows = [['Месяц', 'Кофейня', 'Себестоимость, RUB', 'Расходы проверены']];
+      data.costs.filter(row => `${row.month}-01` <= filters.to && monthRange(row.month).to >= filters.from && (!filters.cafeIds.length || filters.cafeIds.includes(row.cafeId))).forEach(row => rows.push([row.month, data.cafes.find(cafe => cafe.id === row.cafeId)?.name || '', humanMinor(row.amount), row.expensesConfirmed ? 'Да' : 'Нет']));
     } else {
-      const index = cafes.indexOf(cafe);
-      document.title = `${cafe.name} · Daily Cup`;
-      const values = {
-        'cafe-name': cafe.name, 'cafe-district': `${cafe.district} · Москва`,
-        'cafe-tagline': cafe.tagline, 'cafe-description': cafe.description,
-        'cafe-area': cafe.district, 'cafe-address': cafe.address,
-        'cafe-price': `${cafe.price} ₽`, 'cafe-hours': cafe.hours,
-        'cafe-rating': `★ ${average(cafe.scores)} из 5 · оценка клуба`
-      };
-      Object.entries(values).forEach(([key, value]) => { document.getElementById(key).textContent = value; });
-      const picture = document.querySelector('#cafe-photo picture');
-      const image = picture.querySelector('img');
-      const source = picture.querySelector('source');
-      const imageSet = format => [480, 960, 1440].map(width => `images/${cafe.image}-${width}.${format} ${width}w`).join(', ');
-      source.srcset = imageSet('webp');
-      image.srcset = imageSet('jpg');
-      image.src = `images/${cafe.image}-960.jpg`;
-      image.alt = photoAlts[index];
-      ['methods', 'features'].forEach(key => {
-        const list = document.getElementById(`cafe-${key}`);
-        list.replaceChildren(...cafe[key].map(text => element('li', key === 'methods' ? 'tag' : '', text)));
-      });
-      Object.keys(labels).forEach(key => { document.getElementById(`score-${key}`).textContent = `${cafe.scores[key]} / 5`; });
-      document.getElementById('review-link').href = `order.html?cafe=${cafe.id}#review`;
-      const reviews = document.getElementById('cafe-reviews');
-      reviews.append(reviewNode({ ...cafe.review, scores: cafe.scores }, true));
-      try {
-        readRecords('review').filter(validReview).filter(record => record.cafe === cafe.id)
-          .reverse().forEach(record => reviews.append(reviewNode(record)));
-      } catch {
-        document.getElementById('review-storage-note').textContent = 'Не удалось прочитать локальные отзывы. Возможно, хранение данных запрещено в браузере.';
-      }
-
-      const gallery = document.getElementById('cafe-gallery');
-      const dialog = document.getElementById('photo-dialog');
-      const button = element('button', 'button button--secondary', 'Увеличить фото ↗');
-      button.type = 'button';
-      button.addEventListener('click', () => {
-        const photo = document.getElementById('dialog-photo');
-        photo.src = `images/${cafe.image}-1440.jpg`;
-        photo.alt = photoAlts[index];
-        document.getElementById('photo-title').textContent = `${cafe.name} · иллюстрация`;
-        dialog.showModal();
-      });
-      gallery.append(button);
-      dialog.querySelector('.dialog__close').addEventListener('click', () => dialog.close());
-      dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+      rows = [['Дата', 'Тип', 'Кофейня', 'Категория', 'Сумма, RUB', 'Наличные, RUB', 'Карты, RUB', 'Доставка, RUB', 'Чеки', 'Комментарий']];
+      entries.forEach(row => rows.push([row.date, row.typeLabel, row.cafeName, row.category, humanMinor(row.total), humanMinor(row.cash), humanMinor(row.card), humanMinor(row.delivery), row.receipts ?? '', row.comment || '']));
     }
   }
+  const csv = '\ufeff' + rows.map(row => row.map(csvCell).join(';')).join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `bloom-${kind}-${filters.from}-${filters.to}.csv`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('CSV подготовлен. Проверьте загрузки браузера.');
+}
 
-  const savedList = document.getElementById('saved-list');
-  const renderSaved = () => {
-    if (!savedList) return;
-    savedList.replaceChildren();
-    let count = 0;
-    Object.keys(keys).forEach(kind => {
-      readRecords(kind).filter(kind === 'review' ? validReview : validRecord).forEach(record => {
-        count += 1;
-        const item = element('article', 'saved-item');
-        const cafe = cafes.find(cafe => cafe.id === record.cafe);
-        item.append(element('h3', '', kind === 'review' ? `Отзыв: ${cafe.name}` : `Предложение: ${record.title}`));
-        item.append(element('p', 'muted', record.name), element('p', '', record.text));
-        if (kind === 'review') {
-          item.append(element('p', 'review__scores', Object.entries(labels)
-            .map(([key, title]) => `${title}: ${record.scores[key]}/5`).join(' · ')));
-          const link = element('a', '', 'Посмотреть на странице кофейни');
-          link.href = `product.html?id=${cafe.id}#reviews-title`;
-          item.append(link);
-        } else {
-          item.append(element('p', 'muted', `${record.district}, ${record.address} · ${record.price} ₽ · ${record.method}`));
-        }
-        const remove = element('button', 'button button--small button--secondary', 'Удалить');
-        remove.type = 'button';
-        remove.setAttribute('aria-label', `Удалить ${kind === 'review' ? 'отзыв' : 'предложение'}: ${cafe?.name || record.title}`);
-        remove.addEventListener('click', () => {
-          try {
-            writeRecords(kind, readRecords(kind).filter(item => item.id !== record.id));
-            renderSaved();
-            const title = document.getElementById('saved-title');
-            title.tabIndex = -1;
-            title.focus();
-          } catch {
-            const notice = document.getElementById('saved-empty');
-            notice.hidden = false;
-            notice.textContent = 'Не удалось удалить запись. Проверьте разрешения браузера на хранение данных.';
-          }
-        });
-        const actions = element('div', 'form__actions');
-        actions.append(remove);
-        item.append(actions);
-        savedList.append(item);
-      });
-    });
-    document.getElementById('saved-empty').hidden = count !== 0;
-  };
+function updatePeriod(form) {
+  const values = new FormData(form);
+  const from = String(values.get('from'));
+  const to = String(values.get('to'));
+  if (from > to) throw new Error('Начало периода должно быть не позже его окончания.');
+  filters.from = from;
+  filters.to = to;
+  filters.cafeIds = values.getAll('cafeIds');
+  const params = new URLSearchParams({ from, to });
+  filters.cafeIds.forEach(id => params.append('cafe', id));
+  history.replaceState(null, '', `#/${route}?${params}`);
+  render();
+}
 
-  if (savedList) {
-    const cafeSelect = document.getElementById('review-cafe');
-    const cafeId = new URLSearchParams(location.search).get('cafe');
-    if (cafes.some(cafe => cafe.id === cafeId)) cafeSelect.value = cafeId;
-    try { renderSaved(); } catch {
-      document.getElementById('saved-empty').textContent = 'Локальные записи недоступны. Разрешите хранение данных для этого сайта.';
+async function submitRecord(form) {
+  if (!form.reportValidity()) return;
+  const kind = form.dataset.kind;
+  const values = Object.fromEntries(new FormData(form));
+  for (const key of kind === 'revenue' ? ['cash', 'card', 'delivery'] : ['expense', 'movement', 'cost'].includes(kind) ? ['amount'] : []) {
+    try { values[key] = parseMoney(values[key]); }
+    catch (error) { error.fields = { [key]: error.message }; throw error; }
+  }
+  if (kind === 'revenue') values.receipts = values.receipts === '' ? null : Number(values.receipts);
+  if (kind === 'cost') values.expensesConfirmed = form.elements.expensesConfirmed.checked;
+  if (kind === 'movement') values.expenseId = values.expenseId || null;
+  if (kind === 'password') {
+    await store.changePassword(values.currentPassword, values.newPassword);
+  } else {
+    await store.save(kind, values, form.dataset.id || null, form.dataset.version === '' ? null : Number(form.dataset.version));
+  }
+  dialogClose(recordDialog);
+  await render();
+  toast(kind === 'password' ? 'Пароль изменён.' : 'Изменения сохранены. Всё на своих местах.');
+}
+
+async function handleAction(button) {
+  const action = button.dataset.action;
+  const kind = button.dataset.kind;
+  const id = button.dataset.id;
+  if (action === 'auth-mode') { authMode = button.dataset.mode; await render(); }
+  else if (action === 'demo') {
+    button.disabled = true;
+    button.setAttribute('aria-busy', 'true');
+    try {
+      await store.enterDemo();
+      const date = new Date(`${todayInZone()}T12:00:00Z`);
+      date.setUTCMonth(date.getUTCMonth() - 1, 1);
+      Object.assign(filters, monthRange(date.toISOString().slice(0, 7)), { cafeIds: [], search: '', type: 'all', categoryId: '' });
+      history.replaceState(null, '', `#/overview?${new URLSearchParams({ from: filters.from, to: filters.to })}`);
+      await render();
+    } finally { if (button.isConnected) { button.disabled = false; button.removeAttribute('aria-busy'); } }
+  } else if (action === 'logout' || action === 'leave-demo') {
+    store.logout(); data = null; authMode = action === 'leave-demo' ? 'register' : 'login';
+    Object.assign(filters, initialRange, { cafeIds: [], search: '', type: 'all', categoryId: '' });
+    history.replaceState(null, '', '#/overview');
+    await render();
+  } else if (action === 'menu') {
+    const open = app.querySelector('.app-shell').classList.toggle('is-menu-open');
+    button.setAttribute('aria-expanded', String(open));
+    app.querySelector('.workspace').toggleAttribute('inert', open);
+    if (open) app.querySelector('.sidebar a').focus();
+  } else if (action === 'close-menu') closeMenu();
+  else if (action === 'create') openRecord(kind);
+  else if (action === 'edit') openRecord(kind, id);
+  else if (action === 'delete') {
+    const row = data[collections[kind]]?.find(item => item.id === id);
+    if (!row) throw new Error('Запись не найдена.');
+    const description = kind === 'revenue' ? `Продажи за ${formatDate(row.date)}` : kind === 'cost' ? `Себестоимость за ${row.month}` : `${kind === 'expense' ? 'Расход' : 'Движение денег'} за ${formatDate(row.date)} на ${formatMoney(row.amount)}`;
+    confirm('Удалить запись?', `${description}. Показатели будут пересчитаны. Изменение останется в журнале.`, async () => { await store.remove(kind, id, row.version); });
+  } else if (action === 'archive') {
+    const archived = button.dataset.archived === 'true';
+    confirm(archived ? 'Перенести в архив?' : 'Вернуть из архива?', archived ? 'История и отчёты сохранятся. Объект больше нельзя будет выбрать для новых операций.' : 'Объект снова будет доступен для новых операций.', () => store.archive(kind, id, archived), { dangerous: false, label: archived ? 'В архив' : 'Восстановить' });
+  } else if (action === 'close-dialog') dialogClose(recordDialog);
+  else if (action === 'close-confirm') dialogClose(confirmDialog);
+  else if (action === 'confirm') {
+    button.disabled = true;
+    try { await confirmAction(); dialogClose(confirmDialog); await render(); toast('Изменения сохранены.'); }
+    catch (error) { const node = confirmDialog.querySelector('#confirm-error'); node.textContent = error.message; node.hidden = false; }
+    finally { button.disabled = false; }
+  } else if (action === 'export') exportCSV(button.dataset.export || 'operations');
+  else if (action === 'reset-filters') { Object.assign(filters, initialRange, { cafeIds: [], search: '', type: 'all', categoryId: '' }); history.replaceState(null, '', `#/${route}`); await render(); }
+  else if (action === 'privacy') {
+    returnFocus = document.activeElement;
+    recordDialog.innerHTML = `<div class="modal__header"><h2 id="dialog-title">Ваши данные в Bloom</h2><button type="button" class="icon-button" data-action="close-dialog" aria-label="Закрыть">${icon('close')}</button></div><div class="modal__body"><p>Финансовые записи и аккаунты сохраняются в IndexedDB этого браузера. Данные не отправляются на сервер и не синхронизируются с другими устройствами.</p><p>Локальный вход разделяет рабочие пространства, но не защищает от человека с доступом к профилю браузера. Не используйте здесь пароль от других сервисов.</p><p>Очистка данных сайта или приватного окна может удалить записи. Регулярно выгружайте CSV. Для сохранения используйте один и тот же адрес сайта и профиль браузера.</p></div><div class="modal__footer"><button type="button" class="button button--primary" data-action="close-dialog">Понятно</button></div>`;
+    recordDialog.showModal();
+  } else if (action === 'dismiss-toast') document.getElementById('toast-region').replaceChildren();
+  else if (action === 'retry') await boot();
+}
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-action]');
+  if (button && !button.disabled) {
+    event.preventDefault();
+    handleAction(button).catch(error => toast(error.message || 'Не удалось выполнить действие.', true));
+  }
+  if (event.target.closest('.sidebar a')) closeMenu();
+});
+
+document.addEventListener('submit', async event => {
+  const form = event.target;
+  if (!['auth-form', 'record-form', 'report-filters', 'history-filters'].includes(form.id)) return;
+  event.preventDefault();
+  if (form.dataset.saving === 'true') return;
+  form.querySelectorAll('[aria-invalid="true"]').forEach(node => node.removeAttribute('aria-invalid'));
+  form.querySelectorAll('.field__error').forEach(node => { node.textContent = ''; });
+  const alert = form.querySelector('#form-error, .auth-error');
+  if (alert) alert.hidden = true;
+  if (!form.reportValidity()) return;
+  const submit = form.querySelector('[type="submit"]');
+  if (submit) { submit.disabled = true; submit.setAttribute('aria-busy', 'true'); }
+  form.dataset.saving = 'true';
+  try {
+    if (form.id === 'auth-form') {
+      const values = Object.fromEntries(new FormData(form));
+      if (form.dataset.mode === 'register') await store.register(values);
+      else await store.login(values);
+      Object.assign(filters, initialRange, { cafeIds: [], search: '', type: 'all', categoryId: '' });
+      history.replaceState(null, '', '#/overview');
+      await render();
+    } else if (form.id === 'record-form') await submitRecord(form);
+    else if (form.id === 'report-filters') updatePeriod(form);
+    else {
+      Object.assign(filters, Object.fromEntries(new FormData(form)));
+      await render();
     }
+  } catch (error) {
+    formError(form, error);
+    if (!form.querySelector('#form-error, .auth-error')) toast(error.message, true);
+  } finally {
+    delete form.dataset.saving;
+    if (submit?.isConnected) { submit.disabled = false; submit.removeAttribute('aria-busy'); }
+  }
+});
 
-    ['review', 'suggest'].forEach(kind => {
-      const form = document.getElementById(`${kind}-form`);
-      const status = document.getElementById(`${kind}-status`);
-      const controls = Array.from(form.querySelectorAll('input, select, textarea'));
-      const mark = control => {
-        control.setCustomValidity('');
-        if ((control.type === 'text' || control.tagName === 'TEXTAREA')
-          && control.value.trim().length < Math.max(control.required ? 1 : 0, control.minLength)) {
-          control.setCustomValidity(`Введите не менее ${Math.max(1, control.minLength)} символов, не считая пробелов по краям.`);
-        }
-        const error = document.getElementById(`${control.id}-error`);
-        if (control.validity.valid) {
-          control.removeAttribute('aria-invalid');
-          error.textContent = '';
-        } else {
-          control.setAttribute('aria-invalid', 'true');
-          error.textContent = control.validationMessage;
-        }
-      };
-      form.addEventListener('input', event => {
-        if (event.target.hasAttribute('aria-invalid')) mark(event.target);
-      });
-      form.addEventListener('change', event => {
-        if (event.target.hasAttribute('aria-invalid')) mark(event.target);
-      });
-      form.addEventListener('reset', () => {
-        controls.forEach(control => {
-          control.setCustomValidity('');
-          control.removeAttribute('aria-invalid');
-          document.getElementById(`${control.id}-error`).textContent = '';
-        });
-        status.hidden = true;
-      });
-      form.addEventListener('submit', event => {
-        event.preventDefault();
-        status.hidden = true;
-        controls.forEach(control => {
-          if (control.type === 'text' || control.tagName === 'TEXTAREA') control.value = control.value.trim();
-          mark(control);
-        });
-        if (!form.checkValidity()) {
-          form.querySelector('[aria-invalid="true"]').focus();
-          return;
-        }
-        const data = new FormData(form);
-        const value = name => data.get(`${kind}-${name}`);
-        const record = {
-          id: crypto.randomUUID(), name: value(kind === 'review' ? 'name' : 'author'),
-          text: value('comment')
-        };
-        if (kind === 'review') {
-          record.cafe = value('cafe');
-          record.scores = Object.fromEntries(Object.keys(labels).map(key => [key, Number(value(key))]));
-        } else {
-          Object.assign(record, {
-            title: value('name'), district: value('district'), address: value('address'),
-            price: Number(value('price')), method: value('method')
-          });
-        }
-        try {
-          const records = readRecords(kind);
-          records.push(record);
-          writeRecords(kind, records);
-        } catch {
-          status.className = 'notice notice--error';
-          status.textContent = 'Запись не сохранена. Проверьте, разрешено ли хранение данных сайта и достаточно ли места в браузере.';
-          status.hidden = false;
-          status.focus();
-          return;
-        }
-        form.reset();
-        renderSaved();
-        status.className = 'notice notice--success';
-        status.textContent = kind === 'review'
-          ? 'Отзыв сохранён в этом браузере. Он доступен на странице кофейни и в блокноте ниже.'
-          : 'Предложение сохранено в этом браузере. Оно доступно в блокноте ниже и не отправлено на сервер.';
-        status.hidden = false;
-        status.focus();
-      });
-    });
+document.addEventListener('change', event => {
+  if (!event.target.matches('#report-filters select[name="preset"]') || !event.target.value) return;
+  const value = event.target.value;
+  const current = todayInZone(data?.cafes.find(cafe => filters.cafeIds.includes(cafe.id))?.timeZone);
+  let range = { from: current, to: current };
+  if (value === 'current') range = monthRange(current.slice(0, 7));
+  if (value === 'previous') { const date = new Date(`${current}T12:00:00Z`); date.setUTCMonth(date.getUTCMonth() - 1, 1); range = monthRange(date.toISOString().slice(0, 7)); }
+  if (value === 'week') { const date = new Date(`${current}T12:00:00Z`); date.setUTCDate(date.getUTCDate() - 6); range.from = date.toISOString().slice(0, 10); }
+  const form = event.target.form;
+  form.elements.from.value = range.from;
+  form.elements.to.value = range.to;
+  updatePeriod(form);
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && app.querySelector('.is-menu-open')) { closeMenu(); app.querySelector('[data-action="menu"]')?.focus(); }
+  if (event.key === 'Tab' && app.querySelector('.is-menu-open')) {
+    const controls = [...app.querySelectorAll('.sidebar a, .sidebar button')].filter(node => !node.disabled);
+    const first = controls[0], last = controls.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
-  // Плавное появление блоков при прокрутке. Без JS и с reduced-motion всё видно сразу.
-  const revealTargets = document.querySelectorAll('.section, .cafe-card, .stats__item, .steps__item, .banner, .page-heading, .review, .saved-item');
-  if ('IntersectionObserver' in window && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
-    revealTargets.forEach(node => node.classList.add('reveal'));
-    const observer = new IntersectionObserver(entries => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('is-visible');
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { threshold: .12 });
-    revealTargets.forEach(node => observer.observe(node));
-  }
-  // Кнопка «Наверх»: появляется после прокрутки и плавно возвращает к началу страницы.
-  const toTop = document.createElement('button');
-  toTop.type = 'button';
-  toTop.className = 'to-top';
-  toTop.setAttribute('aria-label', 'Наверх');
-  toTop.setAttribute('aria-hidden', 'true');
-  toTop.tabIndex = -1;
-  toTop.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
-  document.body.append(toTop);
-  const toggleTop = () => {
-    const show = window.scrollY > 400;
-    toTop.classList.toggle('is-visible', show);
-    toTop.setAttribute('aria-hidden', String(!show));
-    toTop.tabIndex = show ? 0 : -1;
-  };
-  window.addEventListener('scroll', toggleTop, { passive: true });
-  toggleTop();
-  toTop.addEventListener('click', () => {
-    const smooth = !matchMedia('(prefers-reduced-motion: reduce)').matches;
-    window.scrollTo({ top: 0, behavior: smooth ? 'smooth' : 'auto' });
-  });
-})();
+});
+for (const dialog of [recordDialog, confirmDialog]) {
+  dialog.addEventListener('click', event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialogClose(dialog); } });
+  dialog.addEventListener('cancel', () => { if (returnFocus?.isConnected) queueMicrotask(() => returnFocus.focus()); });
+}
+window.addEventListener('hashchange', () => { closeMenu(); render({ focus: true }); });
+window.addEventListener('pageshow', event => { if (event.persisted) render(); });
+
+async function boot() {
+  try { await store.init(); await render(); }
+  catch (error) { app.innerHTML = `<main id="main" class="status-view error-state">${icon('warning', 40)}<h1>Хранилище недоступно</h1><p>${escape(error.message)}</p><p>Разрешите хранение данных для сайта и откройте Bloom через HTTPS или localhost.</p><button class="button button--primary" type="button" data-action="retry">Попробовать снова</button></main>`; }
+}
+boot();
