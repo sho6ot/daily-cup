@@ -38,7 +38,26 @@
   .cafe-grid--top { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
+@media (min-width: 48rem) {
+  .site-footer__inner { grid-template-columns: 1.4fr 1fr 1.2fr; align-items: start; }
+}
+
+/* Появление блоков при прокрутке. JS добавляет .is-visible; без JS всё видно. */
+.reveal { opacity: 0; transform: translateY(22px); transition: opacity .6s ease, transform .6s ease; }
+.reveal.is-visible { opacity: 1; transform: none; }
+/* Подчёркивание пунктов меню растёт слева направо. */
+.site-nav__link { position: relative; }
+.site-nav__link::after { content: ''; position: absolute; right: .65rem; bottom: .35rem; left: .65rem; height: 2px; background: var(--accent-dark); transform: scaleX(0); transform-origin: left; transition: transform .25s ease; }
+.site-nav__link:hover::after, .site-nav__link[aria-current='page']::after { transform: scaleX(1); }
+.site-nav__link[aria-current='page'] { text-decoration: none; }
+/* Плавный подъём карточек при наведении. */
+.cafe-card { transition: box-shadow .3s ease, transform .3s ease; }
+.cafe-card:hover { transform: translateY(-4px); box-shadow: 0 14px 30px rgb(41 32 27 / .12); }
+/* Специфичность выше, чтобы анимация появления не ломалась hover-переходом. */
+.reveal.cafe-card { transition: opacity .6s ease, transform .6s ease, box-shadow .3s ease; }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
+  .reveal { opacity: 1; transform: none; transition: none; }
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

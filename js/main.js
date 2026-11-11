@@ -314,4 +314,18 @@
       });
     });
   }
+  // Плавное появление блоков при прокрутке. Без JS и с reduced-motion всё видно сразу.
+  const revealTargets = document.querySelectorAll('.section, .cafe-card, .stats__item, .steps__item, .banner, .page-heading, .review, .saved-item');
+  if ('IntersectionObserver' in window && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    revealTargets.forEach(node => node.classList.add('reveal'));
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: .12 });
+    revealTargets.forEach(node => observer.observe(node));
+  }
 })();
