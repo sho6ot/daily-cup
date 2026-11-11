@@ -1,0 +1,44 @@
+@media (min-width: 48rem) {
+  .container { width: min(100% - 4rem, 90rem); }
+  .section { padding-block: 5rem; }
+  .section__heading { display: flex; align-items: end; justify-content: space-between; gap: 2rem; }
+  .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2rem; }
+  .cafe-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2rem; }
+  .form__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .field--wide { grid-column: 1 / -1; }
+  .criteria-table { display: table; }
+  .criteria-table thead { position: static; display: table-header-group; width: auto; height: auto; overflow: visible; clip: auto; white-space: normal; }
+  .criteria-table tbody { display: table-row-group; }
+  .criteria-table tr { display: table-row; margin: 0; padding: 0; border: 0; background: transparent; }
+  .criteria-table th, .criteria-table td { display: table-cell; padding: 1rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .criteria-table th { background: var(--soft); }
+  .criteria-table td[data-label]::before { content: none; }
+  .site-footer__inner { grid-template-columns: 1fr 1fr; align-items: start; }
+}
+
+@media (min-width: 64rem) {
+  .site-header__inner { flex-wrap: nowrap; }
+  .js .menu-toggle { display: none; }
+  .site-nav, .js .site-nav:not(.is-open) { display: flex; width: auto; padding-bottom: 0; }
+  .hero { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 3rem; padding-block: 3rem 0; }
+  .hero__content { padding-bottom: 0; }
+  .hero__media img { min-height: 32rem; }
+  .cafe-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .catalog-layout { grid-template-columns: 220px minmax(0, 1fr); }
+  .filter-toggle { display: none; }
+  .filter-panel__body, .filter-panel__body.is-collapsed { display: block; padding-top: 0; }
+  .detail-layout { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 3rem; }
+  .content-layout { grid-template-columns: minmax(0, 2fr) minmax(15rem, 1fr); gap: 3rem; }
+  .banner { padding: 3rem; }
+}
+
+@media (min-width: 90rem) {
+  .cafe-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .cafe-grid--top { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
