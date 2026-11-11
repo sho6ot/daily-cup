@@ -2,6 +2,8 @@
   'use strict';
 
   document.documentElement.classList.add('js');
+  // Два кадра: стили первого состояния применены, теперь можно анимировать.
+  requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.add('animated')));
   const cafes = window.DAILY_CUP;
   const labels = { taste: 'Вкус', barista: 'Бариста', atmosphere: 'Атмосфера', value: 'Цена' };
   const keys = { review: 'daily-cup.reviews.v1', suggest: 'daily-cup.suggestions.v1' };

@@ -20,14 +20,14 @@
 @media (min-width: 64rem) {
   .site-header__inner { flex-wrap: nowrap; }
   .js .menu-toggle { display: none; }
-  .site-nav, .js .site-nav:not(.is-open) { display: flex; width: auto; padding-bottom: 0; }
+  .site-nav, .js .site-nav { display: flex; width: auto; padding-bottom: 0; max-height: none; opacity: 1; overflow: visible; transition: none; }
   .hero { display: grid; grid-template-columns: 1fr 1fr; align-items: center; gap: 3rem; padding-block: 3rem 0; }
   .hero__content { padding-bottom: 0; }
   .hero__media img { min-height: 32rem; }
   .cafe-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .catalog-layout { grid-template-columns: 220px minmax(0, 1fr); }
   .filter-toggle { display: none; }
-  .filter-panel__body, .filter-panel__body.is-collapsed { display: block; padding-top: 0; }
+  .filter-panel__body, .filter-panel__body.is-collapsed { display: block; padding-top: 0; max-height: none; opacity: 1; overflow: visible; transition: none; }
   .detail-layout { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 3rem; }
   .content-layout { grid-template-columns: minmax(0, 2fr) minmax(15rem, 1fr); gap: 3rem; }
   .banner { padding: 3rem; }
@@ -43,18 +43,23 @@
 }
 
 /* Появление блоков при прокрутке. JS добавляет .is-visible; без JS всё видно. */
-.reveal { opacity: 0; transform: translateY(22px); transition: opacity .6s ease, transform .6s ease; }
+.reveal { opacity: 0; transform: translateY(26px); transition: opacity .9s var(--ease), transform .9s var(--ease); }
 .reveal.is-visible { opacity: 1; transform: none; }
+/* Небольшая ступенчатость в сетке: карточки появляются по очереди. */
+.cafe-grid .reveal:nth-child(2) { transition-delay: .08s; }
+.cafe-grid .reveal:nth-child(3) { transition-delay: .16s; }
+.cafe-grid .reveal:nth-child(4) { transition-delay: .24s; }
+.cafe-grid .reveal:nth-child(n+5) { transition-delay: .3s; }
 /* Подчёркивание пунктов меню растёт слева направо. */
 .site-nav__link { position: relative; }
-.site-nav__link::after { content: ''; position: absolute; right: .65rem; bottom: .35rem; left: .65rem; height: 2px; background: var(--accent-dark); transform: scaleX(0); transform-origin: left; transition: transform .25s ease; }
+.site-nav__link::after { content: ''; position: absolute; right: .65rem; bottom: .35rem; left: .65rem; height: 2px; background: var(--accent-dark); transform: scaleX(0); transform-origin: left; transition: transform .45s var(--ease); }
 .site-nav__link:hover::after, .site-nav__link[aria-current='page']::after { transform: scaleX(1); }
 .site-nav__link[aria-current='page'] { text-decoration: none; }
 /* Плавный подъём карточек при наведении. */
-.cafe-card { transition: box-shadow .3s ease, transform .3s ease; }
-.cafe-card:hover { transform: translateY(-4px); box-shadow: 0 14px 30px rgb(41 32 27 / .12); }
+.cafe-card { transition: box-shadow .5s var(--ease), transform .5s var(--ease); }
+.cafe-card:hover { transform: translateY(-5px); box-shadow: 0 16px 36px rgb(41 32 27 / .13); }
 /* Специфичность выше, чтобы анимация появления не ломалась hover-переходом. */
-.reveal.cafe-card { transition: opacity .6s ease, transform .6s ease, box-shadow .3s ease; }
+.reveal.cafe-card { transition: opacity .9s var(--ease), transform .9s var(--ease), box-shadow .5s var(--ease); }
 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
