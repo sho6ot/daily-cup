@@ -131,5 +131,4 @@ Kris Tian, Haberdoedas, Anastasia Poskaneva — страница
 
 ## Ссылка на опубликованную версию
 
-Сайт публикуется через GitHub Pages; ссылка будет добавлена
-после создания репозитория.
+https://sho6ot.github.io/daily-cup
