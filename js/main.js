@@ -28,6 +28,36 @@ let revision = 0;
 let returnFocus = null;
 let confirmAction = null;
 let toastTimer;
+const backToTop = document.createElement('button');
+backToTop.type = 'button';
+backToTop.className = 'back-to-top';
+backToTop.setAttribute('aria-label', 'Вернуться наверх');
+backToTop.setAttribute('aria-hidden', 'true');
+backToTop.tabIndex = -1;
+backToTop.inert = true;
+backToTop.innerHTML = icon('arrow-up', 22);
+document.body.append(backToTop);
+let backToTopVisible = false;
+
+function updateBackToTop() {
+  const visible = window.scrollY > 420;
+  if (visible === backToTopVisible) return;
+  backToTopVisible = visible;
+  backToTop.classList.toggle('is-visible', visible);
+  backToTop.setAttribute('aria-hidden', String(!visible));
+  backToTop.tabIndex = visible ? 0 : -1;
+  backToTop.inert = !visible;
+  if (!visible && document.activeElement === backToTop) document.getElementById('main')?.focus({ preventScroll: true });
+}
+
+function scrollToBeginning() {
+  document.getElementById('main')?.focus({ preventScroll: true });
+  window.scrollTo({ top: 0, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' });
+}
+
+backToTop.addEventListener('click', scrollToBeginning);
+window.addEventListener('scroll', updateBackToTop, { passive: true });
+window.addEventListener('pageshow', updateBackToTop);
 
 function toast(message, error = false) {
   const region = document.getElementById('toast-region');
@@ -60,6 +90,17 @@ function filterMarkup() {
   </form>`;
 }
 
+function footerMarkup(authenticated) {
+  const navigation = authenticated
+    ? Object.entries(pages).map(([key, [label]]) => `<a href="#/${key}">${escape(label)}</a>`).join('')
+    : '<button type="button" data-action="auth-mode" data-mode="login">Войти</button><button type="button" data-action="auth-mode" data-mode="register">Создать аккаунт</button><button type="button" data-action="demo">Посмотреть демо</button>';
+  return `<footer class="app-footer"><div class="app-footer__inner">
+    <div class="app-footer__identity"><a class="brand app-footer__brand" href="#/overview" aria-label="Bloom, главная">${icon('bloom', 30)}<span>Bloom</span></a><p>Ясность в финансах.<br>Уверенность в решениях.</p><button type="button" class="app-footer__privacy" data-action="privacy">О хранении данных ${icon('arrow-right', 14)}</button></div>
+    <nav class="app-footer__navigation" aria-label="Навигация в подвале"><h2 class="app-footer__title">Навигация</h2><div class="app-footer__links">${navigation}</div></nav>
+    <section class="app-footer__contacts" aria-labelledby="footer-contacts"><h2 class="app-footer__title" id="footer-contacts">Контакты</h2><address><ul><li>${icon('pin', 18)}<span>Москва, пр-т Вернадского, д78-4</span></li><li>${icon('phone', 18)}<a href="tel:+79016741190">+7 (901) 674-11-90</a></li><li>${icon('mail', 18)}<a href="mailto:bloom@site.ru">bloom@site.ru</a></li></ul></address></section>
+  </div><div class="app-footer__bottom">© ${new Date().getFullYear()} Bloom. Все права защищены.</div></footer>`;
+}
+
 function shell() {
   const session = store.getSession();
   const [title, subtitle] = pages[route];
@@ -72,11 +113,11 @@ function shell() {
       <p class="sidebar__label">УПРАВЛЕНИЕ</p><nav id="main-navigation" class="sidebar__nav" aria-label="Основная навигация">${navigation}</nav>
       <div class="sidebar__bottom"><div class="sidebar-note">${icon('lock', 17)}<p>Ваши цифры.<br><span>На вашем устройстве.</span></p></div><div class="profile"><span class="profile__avatar">${escape((session.name || 'B').slice(0, 1).toUpperCase())}</span><span class="profile__name">${escape(session.name)}<small>${session.demo ? 'Знакомство с Bloom' : 'Владелец'}</small></span><button type="button" class="icon-button" data-action="logout" aria-label="Выйти">${icon('logout', 18)}</button></div></div>
     </aside>
-    <div class="workspace"><header class="topbar"><div class="topbar__title"><button type="button" class="icon-button mobile-menu" data-action="menu" aria-expanded="false" aria-controls="main-navigation" aria-label="Открыть навигацию">${icon('menu')}</button><span class="topbar__breadcrumb">Рабочее пространство <span>/</span> <strong>${escape(title)}</strong></span></div><div class="topbar__actions"><span class="local-status"><i></i> Сохранение на устройстве</span><a class="icon-button" href="#/settings" aria-label="Настройки аккаунта">${icon('user', 18)}</a></div></header>
+    <div class="workspace"><header class="topbar"><div class="topbar__title"><button type="button" class="icon-button mobile-menu" data-action="menu" aria-expanded="false" aria-controls="main-navigation" aria-label="Открыть навигацию">${icon('menu')}</button><a class="brand topbar__brand" href="#/overview" aria-label="Bloom, обзор">${icon('bloom', 25)}<span>Bloom</span></a><span class="topbar__breadcrumb">Рабочее пространство <span>/</span> <strong>${escape(title)}</strong></span></div><div class="topbar__actions"><span class="local-status"><i></i> Сохранение на устройстве</span><a class="icon-button" href="#/settings" aria-label="Настройки аккаунта">${icon('user', 18)}</a></div></header>
       ${session.demo ? `<div class="demo-banner">${icon('info', 17)}<span><strong>Пространство с примерами.</strong> Все цифры иллюстративные. Изменения сохраняются отдельно от ваших данных.</span><button type="button" data-action="leave-demo">Создать своё ${icon('arrow-right', 16)}</button></div>` : ''}
       <main id="main" class="main-content" tabindex="-1"><div class="page-heading"><div class="page-heading__copy"><p class="eyebrow">${route === 'overview' ? 'ВСЁ ПОД КОНТРОЛЕМ' : 'BLOOM / ' + escape(title).toLocaleUpperCase('ru')}</p><h1>${escape(title === 'Обзор' ? 'Большая картина. Ясные цифры.' : title)}</h1><p>${escape(subtitle)}</p></div><div class="page-heading__actions"><button class="button button--primary" type="button" data-action="create" data-kind="${primaryKind}">${icon('plus', 18)}${primaryLabel}</button></div></div>
       ${route !== 'settings' ? `<div class="report-toolbar">${filterMarkup()}<button class="button button--ghost button--small" data-action="export" data-export="${route === 'compare' ? 'comparison' : route === 'overview' ? 'summary' : 'operations'}" type="button">${icon('download', 17)}<span>Экспорт CSV</span></button></div>` : ''}
-      <div id="page-content">${renderPage(route, { data, filters, report, session })}</div><footer class="app-footer"><span>© ${new Date().getFullYear()} Bloom. Все права защищены.</span><button type="button" data-action="privacy">О хранении данных ${icon('arrow-right', 13)}</button></footer></main>
+      <div id="page-content" class="page-content">${renderPage(route, { data, filters, report, session })}</div></main>${footerMarkup(true)}
     </div></div>`;
   const navigationParams = new URLSearchParams({ from: filters.from, to: filters.to });
   filters.cafeIds.forEach(id => navigationParams.append('cafe', id));
@@ -89,7 +130,7 @@ function shell() {
 async function render({ focus = false } = {}) {
   const token = ++revision;
   if (!store.getSession()) {
-    app.innerHTML = renderAuth(authMode);
+    app.innerHTML = `${renderAuth(authMode)}${footerMarkup(false)}`;
     document.title = `${authMode === 'register' ? 'Создать пространство' : 'Добро пожаловать'} · Bloom`;
     return;
   }
@@ -318,6 +359,7 @@ document.addEventListener('click', event => {
     handleAction(button).catch(error => toast(error.message || 'Не удалось выполнить действие.', true));
   }
   if (event.target.closest('.sidebar a')) closeMenu();
+  if (event.target.closest('.app-footer a[href^="#/"], .app-footer [data-action="auth-mode"], .app-footer [data-action="demo"]')) scrollToBeginning();
 });
 
 document.addEventListener('submit', async event => {
